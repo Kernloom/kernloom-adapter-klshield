@@ -1,0 +1,10 @@
+docs/admin/
+*.local.md
+*.secrets.md
+.env
+
+bin/
+dist/
+coverage.out
+*.test
+
