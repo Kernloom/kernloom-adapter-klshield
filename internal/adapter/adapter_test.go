@@ -9,6 +9,6 @@ import (
 	contractv1 "github.com/kernloom/kernloom-protocol/contract/adapter/v1"
 )
 
-func TestAdapterPassesMinimalContract(t *testing.T) {
-	contractv1.RunMinimalContract(t, New())
+func TestAdapterPassesServiceContract(t *testing.T) {
+	contractv1.RunServiceContract(t, New())
 }

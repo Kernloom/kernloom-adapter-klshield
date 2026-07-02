@@ -9,13 +9,15 @@ import (
 	adapterv1 "github.com/kernloom/kernloom-protocol/sdk/go/adapter/v1"
 )
 
-type Adapter struct{}
+type Adapter struct {
+	adapterv1.UnimplementedAdapterServiceServer
+}
 
 func New() *Adapter {
 	return &Adapter{}
 }
 
-func (a *Adapter) Describe(context.Context) (*adapterv1.AdapterDescriptor, error) {
+func (a *Adapter) Descriptor(context.Context) (*adapterv1.AdapterDescriptor, error) {
 	return &adapterv1.AdapterDescriptor{
 		AdapterId:       "kernloom.adapter.klshield",
 		Name:            "Kernloom KLShield Adapter",
@@ -60,10 +62,28 @@ func (a *Adapter) Describe(context.Context) (*adapterv1.AdapterDescriptor, error
 			adapterv1.FacetRevokeRuntimeAction,
 			adapterv1.FacetProvideConformanceEvidence,
 		},
+		FacetDescriptors: []*adapterv1.FacetDescriptor{
+			{Name: adapterv1.FacetDescribe, Status: adapterv1.FacetStatusImplemented},
+			{Name: adapterv1.FacetHealth, Status: adapterv1.FacetStatusImplemented},
+			{Name: adapterv1.FacetReadSignals, Status: adapterv1.FacetStatusPlanned, Message: "KLShield signal reads are planned after Slice 2."},
+			{Name: adapterv1.FacetStreamSignals, Status: adapterv1.FacetStatusPlanned, Message: "KLShield signal streaming is planned after Slice 2."},
+			{Name: adapterv1.FacetExecuteRuntimeAction, Status: adapterv1.FacetStatusPlanned, Message: "KLShield runtime action execution is planned after Slice 2."},
+			{Name: adapterv1.FacetGetRuntimeActionState, Status: adapterv1.FacetStatusPlanned, Message: "KLShield runtime action state reads are planned after Slice 2."},
+			{Name: adapterv1.FacetRevokeRuntimeAction, Status: adapterv1.FacetStatusPlanned, Message: "KLShield runtime action revocation is planned after Slice 2."},
+			{Name: adapterv1.FacetProvideConformanceEvidence, Status: adapterv1.FacetStatusPlanned, Message: "KLShield conformance evidence is planned after Slice 2."},
+		},
 	}, nil
 }
 
-func (a *Adapter) Health(context.Context) (*adapterv1.HealthResponse, error) {
+func (a *Adapter) Describe(ctx context.Context, _ *adapterv1.DescribeRequest) (*adapterv1.DescribeResponse, error) {
+	desc, err := a.Descriptor(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &adapterv1.DescribeResponse{Adapter: desc}, nil
+}
+
+func (a *Adapter) Health(context.Context, *adapterv1.HealthRequest) (*adapterv1.HealthResponse, error) {
 	return &adapterv1.HealthResponse{
 		Status:  adapterv1.HealthServing,
 		Message: "klshield adapter bootstrap is serving",
