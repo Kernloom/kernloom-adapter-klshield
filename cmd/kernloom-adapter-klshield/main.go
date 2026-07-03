@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -16,6 +17,8 @@ import (
 	adapterv1 "github.com/kernloom/kernloom-protocol/sdk/go/adapter/v1"
 	"google.golang.org/grpc"
 )
+
+var logger = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{}))
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
@@ -50,18 +53,21 @@ func serve(args []string) {
 	}
 	store, err := runtimeMapStore(*runtimeStore, *bpffsRoot, *defaultRatePPS, *defaultBurst)
 	if err != nil {
+		logger.Error("klshield_adapter_store_failed", "runtime_store", *runtimeStore, "error", err.Error())
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
+		logger.Error("klshield_adapter_listen_failed", "addr", *addr, "error", err.Error())
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	server := grpc.NewServer()
 	adapterv1.RegisterAdapterServiceServer(server, adapter.NewWithStore(store))
-	fmt.Printf("kernloom-adapter-klshield serving gRPC on %s with %s runtime store\n", *addr, storeKind(store))
+	logger.Info("adapter_server_starting", "adapter_id", "kernloom.adapter.klshield", "addr", *addr, "runtime_store", storeKind(store))
 	if err := server.Serve(listener); err != nil {
+		logger.Error("adapter_server_failed", "adapter_id", "kernloom.adapter.klshield", "addr", *addr, "error", err.Error())
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
