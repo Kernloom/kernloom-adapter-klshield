@@ -17,7 +17,12 @@ make test
 ## Run
 
 ```sh
-./bin/kernloom-adapter-klshield serve --addr 127.0.0.1:18082
+./bin/kernloom-adapter-klshield serve \
+  --addr 127.0.0.1:18082 \
+  --tls-cert /etc/kernloom/adapter/server.crt \
+  --tls-key /etc/kernloom/adapter/server.key \
+  --client-ca /etc/kernloom/adapter/client-ca.pem \
+  --authority-public-key /etc/kernloom/trust/runtime-authority.public.json
 ```
 
 The default runtime store is the in-memory substitute used by tests and local
@@ -27,10 +32,23 @@ Linux host where `kernloom-shield` has loaded and pinned its maps:
 ```sh
 sudo ./bin/kernloom-adapter-klshield serve \
   --addr 127.0.0.1:18082 \
+  --tls-cert /etc/kernloom/adapter/server.crt \
+  --tls-key /etc/kernloom/adapter/server.key \
+  --client-ca /etc/kernloom/adapter/client-ca.pem \
+  --authority-public-key /etc/kernloom/trust/runtime-authority.public.json \
   --runtime-store bpf \
   --bpffs-root /sys/fs/bpf \
   --default-rate-pps 1000 \
   --default-burst 2000
+```
+
+Local plaintext smoke tests are explicit dev mode:
+
+```sh
+./bin/kernloom-adapter-klshield serve \
+  --addr 127.0.0.1:18082 \
+  --dev-insecure-transport \
+  --dev-insecure-skip-authority-verification
 ```
 
 For local inspection, running the binary without arguments prints the adapter descriptor as JSON.
@@ -54,6 +72,11 @@ It writes
 `runtime_action.deny_temporarily_source` as a deny-map value of `1`, reads back
 the pinned map after execute/state checks, and deletes the map key during
 revoke. KLIQ remains the lease and TTL owner.
+
+Before enforcement, the adapter verifies the signed RuntimeBundle authority
+against the configured Ed25519 public key. The signature, source commit,
+runtime action allowlist, max scope, max TTL and CapabilityGrant scope must
+match the request.
 
 Execute duplicate detection uses `idempotency_key`. State read-back and revoke
 require the full runtime action selector: `runtime_action_id`,

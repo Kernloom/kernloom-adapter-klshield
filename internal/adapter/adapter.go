@@ -37,8 +37,9 @@ const (
 
 type Adapter struct {
 	adapterv1.UnimplementedAdapterServiceServer
-	store RuntimeMapStore
-	now   func() time.Time
+	store     RuntimeMapStore
+	authority RuntimeAuthorityVerifier
+	now       func() time.Time
 }
 
 func New() *Adapter {
@@ -46,10 +47,17 @@ func New() *Adapter {
 }
 
 func NewWithStore(store RuntimeMapStore) *Adapter {
+	return NewWithStoreAndAuthority(store, RejectingRuntimeAuthorityVerifier{})
+}
+
+func NewWithStoreAndAuthority(store RuntimeMapStore, authority RuntimeAuthorityVerifier) *Adapter {
 	if store == nil {
 		store = NewMemoryRuntimeMapStore()
 	}
-	return &Adapter{store: store, now: time.Now}
+	if authority == nil {
+		authority = RejectingRuntimeAuthorityVerifier{}
+	}
+	return &Adapter{store: store, authority: authority, now: time.Now}
 }
 
 type RuntimeMapEntry struct {
@@ -268,6 +276,9 @@ func (a *Adapter) ExecuteRuntimeAction(ctx context.Context, req *adapterv1.Execu
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	now := a.now().UTC()
+	if err := a.authority.VerifyRuntimeAuthority(req, actionType, now); err != nil {
+		return nil, status.Error(codes.PermissionDenied, err.Error())
+	}
 	entry := RuntimeMapEntry{
 		RuntimeActionID:   req.GetRuntimeActionId(),
 		IdempotencyKey:    req.GetIdempotencyKey(),

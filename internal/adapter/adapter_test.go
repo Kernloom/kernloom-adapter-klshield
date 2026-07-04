@@ -5,6 +5,12 @@ package adapter
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +24,8 @@ func TestAdapterPassesServiceContract(t *testing.T) {
 
 func TestExecuteRuntimeActionRateLimitAndReadback(t *testing.T) {
 	ctx := context.Background()
-	adapter := New()
-	req := validExecuteRequest("runtime_action.rate_limit_source", "source-1", "idem-rate-limit")
+	adapter, signer := newTestAdapter(t)
+	req := validSignedExecuteRequest(t, signer, "runtime_action.rate_limit_source", "source-1", "idem-rate-limit")
 
 	resp, err := adapter.ExecuteRuntimeAction(ctx, req)
 	if err != nil {
@@ -43,8 +49,8 @@ func TestExecuteRuntimeActionRateLimitAndReadback(t *testing.T) {
 
 func TestExecuteRuntimeActionDenyTemporarily(t *testing.T) {
 	ctx := context.Background()
-	adapter := New()
-	resp, err := adapter.ExecuteRuntimeAction(ctx, validExecuteRequest("runtime_action.deny_temporarily_source", "source-2", "idem-deny"))
+	adapter, signer := newTestAdapter(t)
+	resp, err := adapter.ExecuteRuntimeAction(ctx, validSignedExecuteRequest(t, signer, "runtime_action.deny_temporarily_source", "source-2", "idem-deny"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,12 +62,12 @@ func TestExecuteRuntimeActionDenyTemporarily(t *testing.T) {
 
 func TestExecuteRuntimeActionDuplicateIsIdempotent(t *testing.T) {
 	ctx := context.Background()
-	adapter := New()
-	first := validExecuteRequest("runtime_action.rate_limit_source", "source-dup", "idem-dup")
+	adapter, signer := newTestAdapter(t)
+	first := validSignedExecuteRequest(t, signer, "runtime_action.rate_limit_source", "source-dup", "idem-dup")
 	if _, err := adapter.ExecuteRuntimeAction(ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	second := validExecuteRequest("runtime_action.rate_limit_source", "source-dup", "idem-dup")
+	second := validSignedExecuteRequest(t, signer, "runtime_action.rate_limit_source", "source-dup", "idem-dup")
 	second.Ttl = "10m"
 	resp, err := adapter.ExecuteRuntimeAction(ctx, second)
 	if err != nil {
@@ -82,8 +88,8 @@ func TestExecuteRuntimeActionDuplicateIsIdempotent(t *testing.T) {
 
 func TestRevokeRuntimeActionProducesTTLCleanupEvidence(t *testing.T) {
 	ctx := context.Background()
-	adapter := New()
-	req := validExecuteRequest("runtime_action.deny_temporarily_source", "source-cleanup", "idem-cleanup")
+	adapter, signer := newTestAdapter(t)
+	req := validSignedExecuteRequest(t, signer, "runtime_action.deny_temporarily_source", "source-cleanup", "idem-cleanup")
 	if _, err := adapter.ExecuteRuntimeAction(ctx, req); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +111,7 @@ func TestRevokeRuntimeActionProducesTTLCleanupEvidence(t *testing.T) {
 }
 
 func TestRuntimeActionRejectsUnsupportedAction(t *testing.T) {
-	adapter := New()
+	adapter, _ := newTestAdapter(t)
 	req := validExecuteRequest("runtime_action.unsupported", "source-3", "idem-unsupported")
 	if _, err := adapter.ExecuteRuntimeAction(context.Background(), req); err == nil {
 		t.Fatal("expected unsupported action to be rejected")
@@ -113,7 +119,7 @@ func TestRuntimeActionRejectsUnsupportedAction(t *testing.T) {
 }
 
 func TestRuntimeActionRejectsMissingSignedBundle(t *testing.T) {
-	adapter := New()
+	adapter, _ := newTestAdapter(t)
 	req := validExecuteRequest("runtime_action.rate_limit_source", "source-no-bundle", "idem-no-bundle")
 	req.SignedBundle = nil
 	if _, err := adapter.ExecuteRuntimeAction(context.Background(), req); err == nil {
@@ -121,10 +127,46 @@ func TestRuntimeActionRejectsMissingSignedBundle(t *testing.T) {
 	}
 }
 
+func TestRuntimeActionRejectsInvalidSignedBundle(t *testing.T) {
+	adapter, signer := newTestAdapter(t)
+	req := validSignedExecuteRequest(t, signer, "runtime_action.rate_limit_source", "source-invalid-signature", "idem-invalid-signature")
+	var envelope signedEnvelope
+	if err := json.Unmarshal(req.SignedBundle, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope.Signature[0] ^= 1
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SignedBundle = data
+	if _, err := adapter.ExecuteRuntimeAction(context.Background(), req); err == nil {
+		t.Fatal("expected invalid signed runtime authority to be rejected")
+	}
+}
+
+func TestRuntimeActionRejectsExpiredSignedBundle(t *testing.T) {
+	adapter, signer := newTestAdapter(t)
+	req := validExecuteRequest("runtime_action.rate_limit_source", "source-expired-signature", "idem-expired-signature")
+	signer.attachSignedBundle(t, req, time.Now().Add(-time.Second))
+	if _, err := adapter.ExecuteRuntimeAction(context.Background(), req); err == nil {
+		t.Fatal("expected expired signed runtime authority to be rejected")
+	}
+}
+
+func TestRuntimeActionRejectsCapabilityGrantScopeMismatch(t *testing.T) {
+	adapter, signer := newTestAdapter(t)
+	req := validExecuteRequest("runtime_action.rate_limit_source", "source-grant-scope", "idem-grant-scope")
+	signer.attachSignedBundleWithScope(t, req, "application", time.Now().Add(time.Hour))
+	if _, err := adapter.ExecuteRuntimeAction(context.Background(), req); err == nil {
+		t.Fatal("expected capability grant scope mismatch to be rejected")
+	}
+}
+
 func TestSignalsAndConformanceEvidenceUseControlledStore(t *testing.T) {
 	ctx := context.Background()
-	adapter := New()
-	if _, err := adapter.ExecuteRuntimeAction(ctx, validExecuteRequest("runtime_action.rate_limit_source", "source-signal", "idem-signal")); err != nil {
+	adapter, signer := newTestAdapter(t)
+	if _, err := adapter.ExecuteRuntimeAction(ctx, validSignedExecuteRequest(t, signer, "runtime_action.rate_limit_source", "source-signal", "idem-signal")); err != nil {
 		t.Fatal(err)
 	}
 	signals, err := adapter.ReadSignals(ctx, &adapterv1.ReadSignalsRequest{Scope: "local_node"})
@@ -142,6 +184,7 @@ func TestSignalsAndConformanceEvidenceUseControlledStore(t *testing.T) {
 }
 
 func validExecuteRequest(actionType, targetKey, idempotencyKey string) *adapterv1.ExecuteRuntimeActionRequest {
+	grantID := "grant.test." + strings.TrimPrefix(strings.TrimPrefix(actionType, "runtime_action."), "runtime.action.")
 	return &adapterv1.ExecuteRuntimeActionRequest{
 		RuntimeActionId:   "runtime_action.test",
 		IdempotencyKey:    idempotencyKey,
@@ -155,9 +198,15 @@ func validExecuteRequest(actionType, targetKey, idempotencyKey string) *adapterv
 		Reason:            "test runtime action",
 		AuditId:           "audit.test",
 		SourceCommit:      "abc123",
-		CapabilityGrantId: "grant.test",
-		SignedBundle:      []byte(`{"kind":"SignedEnvelope"}`),
+		CapabilityGrantId: grantID,
 	}
+}
+
+func validSignedExecuteRequest(t *testing.T, signer testAuthoritySigner, actionType, targetKey, idempotencyKey string) *adapterv1.ExecuteRuntimeActionRequest {
+	t.Helper()
+	req := validExecuteRequest(actionType, targetKey, idempotencyKey)
+	signer.attachSignedBundle(t, req, time.Now().Add(time.Hour))
+	return req
 }
 
 func stateRequestFor(req *adapterv1.ExecuteRuntimeActionRequest) *adapterv1.GetRuntimeActionStateRequest {
@@ -213,4 +262,93 @@ func assertEvidenceType(t *testing.T, evidence []*adapterv1.Evidence, evidenceTy
 		}
 	}
 	t.Fatalf("expected evidence type %q, got %#v", evidenceType, evidence)
+}
+
+type testAuthoritySigner struct {
+	keyID      string
+	publicKey  ed25519.PublicKey
+	privateKey ed25519.PrivateKey
+}
+
+func newTestAdapter(t *testing.T) (*Adapter, testAuthoritySigner) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer := testAuthoritySigner{
+		keyID:      "runtime-authority.test",
+		publicKey:  publicKey,
+		privateKey: privateKey,
+	}
+	verifier, err := NewStaticRuntimeAuthorityVerifier(signer.keyID, signer.publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewWithStoreAndAuthority(NewMemoryRuntimeMapStore(), verifier), signer
+}
+
+func (s testAuthoritySigner) attachSignedBundle(t *testing.T, req *adapterv1.ExecuteRuntimeActionRequest, expiresAt time.Time) {
+	t.Helper()
+	s.attachSignedBundleWithScope(t, req, req.GetTargetScope(), expiresAt)
+}
+
+func (s testAuthoritySigner) attachSignedBundleWithScope(t *testing.T, req *adapterv1.ExecuteRuntimeActionRequest, grantScope string, expiresAt time.Time) {
+	t.Helper()
+	actionType, _, err := normalizeAction(req.GetActionType())
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"kind": "RuntimeBundle",
+		"metadata": map[string]any{
+			"id":            "runtime_bundle.test",
+			"policy_id":     "policy.runtime",
+			"source_commit": req.GetSourceCommit(),
+		},
+		"spec": map[string]any{
+			"policy_id":       "policy.runtime",
+			"runtime_allowed": true,
+			"runtime_actions": []map[string]string{{
+				"label":        actionType,
+				"canonical_id": actionType,
+			}},
+			"capability_grants": []map[string]any{{
+				"capability_grant_id":   req.GetCapabilityGrantId(),
+				"adapter_id":            req.GetAdapterId(),
+				"capability_id":         req.GetCapabilityId(),
+				"action_type":           actionType,
+				"allowed_target_scopes": []string{grantScope},
+				"max_ttl":               "10m",
+			}},
+			"max_ttl":   "10m",
+			"max_scope": req.GetTargetScope(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(payload)
+	envelope := signedEnvelope{
+		Kind:          "SignedEnvelope",
+		KeyID:         s.keyID,
+		Algorithm:     "Ed25519",
+		PayloadType:   "application/vnd.kernloom.artifact+json",
+		Payload:       payload,
+		PayloadSHA256: "sha256:" + hex.EncodeToString(sum[:]),
+		SignedAt:      time.Now().UTC(),
+		ExpiresAt:     &expiresAt,
+		SourceCommit:  req.GetSourceCommit(),
+		PolicyID:      "policy.runtime",
+	}
+	input, err := runtimeAuthoritySigningInput(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope.Signature = ed25519.Sign(s.privateKey, input)
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SignedBundle = data
 }
