@@ -49,8 +49,9 @@ func serve(args []string) {
 	addr := fs.String("addr", "127.0.0.1:18082", "gRPC listen address")
 	runtimeStore := fs.String("runtime-store", "memory", "runtime store backend: memory or bpf")
 	bpffsRoot := fs.String("bpffs-root", adapter.DefaultBPFFSRoot, "BPF filesystem root for pinned KLShield maps")
-	defaultRatePPS := fs.Uint64("default-rate-pps", adapter.DefaultRuntimeRatePPS, "per-source rate limit written for rate_limit_source actions")
-	defaultBurst := fs.Uint64("default-burst", adapter.DefaultRuntimeBurst, "per-source burst written for rate_limit_source actions")
+	defaultRatePPS := fs.Uint64("default-rate-pps", adapter.DefaultRuntimeRatePPS, "dev fallback per-source rate limit; used only with --dev-allow-default-rate-limit-parameters")
+	defaultBurst := fs.Uint64("default-burst", adapter.DefaultRuntimeBurst, "dev fallback per-source burst; used only with --dev-allow-default-rate-limit-parameters")
+	devAllowDefaultRateLimitParameters := fs.Bool("dev-allow-default-rate-limit-parameters", false, "allow adapter defaults for missing signed rate_limit parameters; dev/smoke only")
 	devInsecureTransport := fs.Bool("dev-insecure-transport", false, "allow plaintext gRPC transport; dev/smoke only")
 	tlsCert := fs.String("tls-cert", "", "server TLS certificate for adapter mTLS")
 	tlsKey := fs.String("tls-key", "", "server TLS private key for adapter mTLS")
@@ -68,7 +69,7 @@ func serve(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
-	store, err := runtimeMapStore(*runtimeStore, *bpffsRoot, *defaultRatePPS, *defaultBurst)
+	store, err := runtimeMapStore(*runtimeStore, *bpffsRoot, *defaultRatePPS, *defaultBurst, *devAllowDefaultRateLimitParameters)
 	if err != nil {
 		logger.Error("klshield_adapter_store_failed", "runtime_store", *runtimeStore, "error", err.Error())
 		fmt.Fprintln(os.Stderr, err)
@@ -88,7 +89,7 @@ func serve(args []string) {
 	}
 	server := grpc.NewServer(serverOptions...)
 	adapterv1.RegisterAdapterServiceServer(server, adapter.NewWithStoreAndAuthority(store, authority))
-	logger.Info("adapter_server_starting", "adapter_id", "kernloom.adapter.klshield", "addr", *addr, "runtime_store", storeKind(store), "dev_insecure_transport", *devInsecureTransport, "dev_insecure_authority", *devSkipAuthorityVerification)
+	logger.Info("adapter_server_starting", "adapter_id", "kernloom.adapter.klshield", "addr", *addr, "runtime_store", storeKind(store), "dev_insecure_transport", *devInsecureTransport, "dev_insecure_authority", *devSkipAuthorityVerification, "dev_allow_default_rate_limit_parameters", *devAllowDefaultRateLimitParameters)
 	if err := server.Serve(listener); err != nil {
 		logger.Error("adapter_server_failed", "adapter_id", "kernloom.adapter.klshield", "addr", *addr, "error", err.Error())
 		fmt.Fprintln(os.Stderr, err)
@@ -157,15 +158,16 @@ func runtimeAuthorityVerifier(publicKeyPath, keyID string, devSkip bool) (adapte
 	return adapter.NewStaticRuntimeAuthorityVerifier(keyID, publicKey)
 }
 
-func runtimeMapStore(kind, bpffsRoot string, defaultRatePPS, defaultBurst uint64) (adapter.RuntimeMapStore, error) {
+func runtimeMapStore(kind, bpffsRoot string, defaultRatePPS, defaultBurst uint64, allowDefaultRateLimitFallback bool) (adapter.RuntimeMapStore, error) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "", "memory":
 		return adapter.NewMemoryRuntimeMapStore(), nil
 	case "bpf":
 		return adapter.NewBPFMapRuntimeStore(adapter.BPFMapRuntimeStoreConfig{
-			BPFFSRoot:      bpffsRoot,
-			DefaultRatePPS: defaultRatePPS,
-			DefaultBurst:   defaultBurst,
+			BPFFSRoot:                     bpffsRoot,
+			DefaultRatePPS:                defaultRatePPS,
+			DefaultBurst:                  defaultBurst,
+			AllowDefaultRateLimitFallback: allowDefaultRateLimitFallback,
 		})
 	default:
 		return nil, fmt.Errorf("unknown runtime store %q; expected memory or bpf", kind)

@@ -74,6 +74,8 @@ type RuntimeMapEntry struct {
 	AuditID           string
 	SourceCommit      string
 	CapabilityGrantID string
+	RatePPS           uint64
+	Burst             uint64
 	MapName           string
 	Status            string
 	CreatedAt         time.Time
@@ -279,6 +281,14 @@ func (a *Adapter) ExecuteRuntimeAction(ctx context.Context, req *adapterv1.Execu
 	if err := a.authority.VerifyRuntimeAuthority(req, actionType, now); err != nil {
 		return nil, status.Error(codes.PermissionDenied, err.Error())
 	}
+	parameters, err := runtimeActionParametersFromSignedBundle(req.GetSignedBundle(), req.GetCapabilityGrantId(), actionType)
+	if err != nil {
+		if fallback, ok := rateLimitFallbackFromStore(a.store, actionType); ok {
+			parameters = fallback
+		} else {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
 	entry := RuntimeMapEntry{
 		RuntimeActionID:   req.GetRuntimeActionId(),
 		IdempotencyKey:    req.GetIdempotencyKey(),
@@ -293,6 +303,8 @@ func (a *Adapter) ExecuteRuntimeAction(ctx context.Context, req *adapterv1.Execu
 		AuditID:           req.GetAuditId(),
 		SourceCommit:      req.GetSourceCommit(),
 		CapabilityGrantID: req.GetCapabilityGrantId(),
+		RatePPS:           parameters.RatePPS,
+		Burst:             parameters.Burst,
 		MapName:           mapName,
 		Status:            statusActive,
 		CreatedAt:         now,
@@ -473,6 +485,54 @@ func normalizeAction(actionType string) (string, string, error) {
 	}
 }
 
+type runtimeActionParameters struct {
+	RatePPS uint64
+	Burst   uint64
+}
+
+func runtimeActionParametersFromSignedBundle(signedBundle []byte, grantID, actionType string) (runtimeActionParameters, error) {
+	if actionType != actionRateLimitSource {
+		return runtimeActionParameters{}, nil
+	}
+	var envelope signedEnvelope
+	if err := json.Unmarshal(signedBundle, &envelope); err != nil {
+		return runtimeActionParameters{}, fmt.Errorf("rate_limit_source requires signed runtime authority envelope")
+	}
+	var runtimeBundle runtimeAuthorityBundle
+	if err := json.Unmarshal(envelope.Payload, &runtimeBundle); err != nil {
+		return runtimeActionParameters{}, fmt.Errorf("rate_limit_source requires signed runtime authority payload")
+	}
+	for _, grant := range runtimeBundle.Spec.CapabilityGrants {
+		if grant.ID != grantID {
+			continue
+		}
+		if grant.RateLimit == nil || grant.RateLimit.RatePPS == 0 || grant.RateLimit.Burst == 0 {
+			return runtimeActionParameters{}, fmt.Errorf("rate_limit_source requires signed rate_limit.rate_pps and rate_limit.burst")
+		}
+		return runtimeActionParameters{RatePPS: grant.RateLimit.RatePPS, Burst: grant.RateLimit.Burst}, nil
+	}
+	return runtimeActionParameters{}, fmt.Errorf("rate_limit_source capability grant %q is not present in signed runtime authority", grantID)
+}
+
+type rateLimitFallbackProvider interface {
+	RateLimitFallback() (ratePPS, burst uint64, ok bool)
+}
+
+func rateLimitFallbackFromStore(store RuntimeMapStore, actionType string) (runtimeActionParameters, bool) {
+	if actionType != actionRateLimitSource {
+		return runtimeActionParameters{}, false
+	}
+	provider, ok := store.(rateLimitFallbackProvider)
+	if !ok {
+		return runtimeActionParameters{}, false
+	}
+	ratePPS, burst, ok := provider.RateLimitFallback()
+	if !ok || ratePPS == 0 || burst == 0 {
+		return runtimeActionParameters{}, false
+	}
+	return runtimeActionParameters{RatePPS: ratePPS, Burst: burst}, true
+}
+
 func (a *Adapter) evidenceFor(entry RuntimeMapEntry, evidenceType, operation string) *adapterv1.Evidence {
 	return evidenceFor(entry, evidenceType, operation, evidenceConfidence(a.store))
 }
@@ -494,6 +554,8 @@ func evidenceFor(entry RuntimeMapEntry, evidenceType, operation, confidence stri
 		"audit_id":            entry.AuditID,
 		"source_commit":       entry.SourceCommit,
 		"capability_grant_id": entry.CapabilityGrantID,
+		"rate_pps":            fmt.Sprint(entry.RatePPS),
+		"burst":               fmt.Sprint(entry.Burst),
 	})
 	return &adapterv1.Evidence{
 		Id:         "klshield.evidence." + shortHash(entry.IdempotencyKey+"."+operation+"."+entry.Status),

@@ -10,7 +10,8 @@ const (
 )
 
 type BPFMapRuntimeStoreConfig struct {
-	BPFFSRoot      string
-	DefaultRatePPS uint64
-	DefaultBurst   uint64
+	BPFFSRoot                     string
+	DefaultRatePPS                uint64
+	DefaultBurst                  uint64
+	AllowDefaultRateLimitFallback bool
 }

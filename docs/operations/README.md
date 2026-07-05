@@ -17,6 +17,9 @@ sudo ./bin/kernloom-adapter-klshield serve \
 Production mode requires adapter mTLS and signed runtime authority
 verification. `--dev-insecure-transport` and
 `--dev-insecure-skip-authority-verification` are local smoke-test flags only.
+For `runtime_action.rate_limit_source`, rate and burst must come from the
+signed RuntimeBundle CapabilityGrant. `--dev-allow-default-rate-limit-parameters`
+permits adapter CLI defaults only for local smoke tests.
 
 The adapter keeps an in-process idempotency index so it can map Kernloom runtime
 action IDs back to KLShield IP-keyed maps. KLIQ remains the durable owner of

@@ -262,4 +262,8 @@ type runtimeAuthorityCapabilityGrant struct {
 	AllowedTargetScopes []string `json:"allowed_target_scopes"`
 	MaxTTL              string   `json:"max_ttl"`
 	ExpiresAt           string   `json:"expires_at,omitempty"`
+	RateLimit           *struct {
+		RatePPS uint64 `json:"rate_pps"`
+		Burst   uint64 `json:"burst"`
+	} `json:"rate_limit,omitempty"`
 }

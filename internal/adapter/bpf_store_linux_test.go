@@ -26,6 +26,61 @@ func TestBPFMapRuntimeStoreDefaults(t *testing.T) {
 	if store.defaultRatePPS != DefaultRuntimeRatePPS || store.defaultBurst != DefaultRuntimeBurst {
 		t.Fatalf("expected default rate config, got rate=%d burst=%d", store.defaultRatePPS, store.defaultBurst)
 	}
+	if store.allowDefaultRateLimitFallback {
+		t.Fatal("expected default rate-limit fallback to be disabled by default")
+	}
+}
+
+func TestBPFMapRuntimeStoreRejectsRateLimitWithoutSignedParameters(t *testing.T) {
+	store := newTestBPFMapRuntimeStore(t, newFakeBPFBackend())
+	_, _, err := store.Upsert(context.Background(), RuntimeMapEntry{
+		RuntimeActionID: "runtime_action.missing-rate-params",
+		IdempotencyKey:  "idem.missing-rate-params",
+		AdapterID:       adapterID,
+		ActionType:      actionRateLimitSource,
+		TargetScope:     "source",
+		TargetKey:       "192.0.2.10",
+		CapabilityID:    "klshield.runtime.source_mitigation",
+		MapName:         mapRateLimit4,
+		Status:          statusActive,
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "rate_limit.rate_pps") {
+		t.Fatalf("expected missing signed rate limit parameters to be rejected, got %v", err)
+	}
+}
+
+func TestBPFMapRuntimeStoreAllowsExplicitDevRateLimitFallback(t *testing.T) {
+	backend := newFakeBPFBackend()
+	store, err := NewBPFMapRuntimeStore(BPFMapRuntimeStoreConfig{AllowDefaultRateLimitFallback: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.backend = backend
+	_, _, err = store.Upsert(context.Background(), RuntimeMapEntry{
+		RuntimeActionID: "runtime_action.dev-fallback-rate",
+		IdempotencyKey:  "idem.dev-fallback-rate",
+		AdapterID:       adapterID,
+		ActionType:      actionRateLimitSource,
+		TargetScope:     "source",
+		TargetKey:       "192.0.2.10",
+		CapabilityID:    "klshield.runtime.source_mitigation",
+		MapName:         mapRateLimit4,
+		Status:          statusActive,
+		CreatedAt:       time.Now().UTC(),
+		UpdatedAt:       time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, found, err := backend.LookupRateLimit4(bpfKey4Bytes{IP: [4]byte{192, 0, 2, 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !found || value.RatePPS != DefaultRuntimeRatePPS || value.Burst != DefaultRuntimeBurst {
+		t.Fatalf("expected dev fallback rate values, found=%t value=%#v", found, value)
+	}
 }
 
 func TestBPFMapRuntimeStoreRejectsNonIPv4TargetsBeforeMapOpen(t *testing.T) {

@@ -60,6 +60,15 @@ func TestExecuteRuntimeActionDenyTemporarily(t *testing.T) {
 	assertEvidenceType(t, resp.GetEvidence(), "klshield.map_write")
 }
 
+func TestExecuteRuntimeActionRateLimitRequiresSignedParameters(t *testing.T) {
+	adapter, signer := newTestAdapter(t)
+	req := validExecuteRequest("runtime_action.rate_limit_source", "source-missing-rate-params", "idem-missing-rate-params")
+	signer.attachSignedBundleWithRateLimitParameters(t, req, time.Now().Add(time.Hour), false)
+	if _, err := adapter.ExecuteRuntimeAction(context.Background(), req); err == nil || !strings.Contains(err.Error(), "rate_limit.rate_pps") {
+		t.Fatalf("expected missing signed rate limit parameters to be rejected, got %v", err)
+	}
+}
+
 func TestExecuteRuntimeActionDuplicateIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	adapter, signer := newTestAdapter(t)
@@ -290,14 +299,38 @@ func newTestAdapter(t *testing.T) (*Adapter, testAuthoritySigner) {
 
 func (s testAuthoritySigner) attachSignedBundle(t *testing.T, req *adapterv1.ExecuteRuntimeActionRequest, expiresAt time.Time) {
 	t.Helper()
-	s.attachSignedBundleWithScope(t, req, req.GetTargetScope(), expiresAt)
+	s.attachSignedBundleWithScopeAndRateLimitParameters(t, req, req.GetTargetScope(), expiresAt, true)
 }
 
 func (s testAuthoritySigner) attachSignedBundleWithScope(t *testing.T, req *adapterv1.ExecuteRuntimeActionRequest, grantScope string, expiresAt time.Time) {
 	t.Helper()
+	s.attachSignedBundleWithScopeAndRateLimitParameters(t, req, grantScope, expiresAt, true)
+}
+
+func (s testAuthoritySigner) attachSignedBundleWithRateLimitParameters(t *testing.T, req *adapterv1.ExecuteRuntimeActionRequest, expiresAt time.Time, includeRateLimit bool) {
+	t.Helper()
+	s.attachSignedBundleWithScopeAndRateLimitParameters(t, req, req.GetTargetScope(), expiresAt, includeRateLimit)
+}
+
+func (s testAuthoritySigner) attachSignedBundleWithScopeAndRateLimitParameters(t *testing.T, req *adapterv1.ExecuteRuntimeActionRequest, grantScope string, expiresAt time.Time, includeRateLimit bool) {
+	t.Helper()
 	actionType, _, err := normalizeAction(req.GetActionType())
 	if err != nil {
 		t.Fatal(err)
+	}
+	grant := map[string]any{
+		"capability_grant_id":   req.GetCapabilityGrantId(),
+		"adapter_id":            req.GetAdapterId(),
+		"capability_id":         req.GetCapabilityId(),
+		"action_type":           actionType,
+		"allowed_target_scopes": []string{grantScope},
+		"max_ttl":               "10m",
+	}
+	if actionType == actionRateLimitSource && includeRateLimit {
+		grant["rate_limit"] = map[string]any{
+			"rate_pps": uint64(1000),
+			"burst":    uint64(2000),
+		}
 	}
 	payload, err := json.Marshal(map[string]any{
 		"kind": "RuntimeBundle",
@@ -313,16 +346,9 @@ func (s testAuthoritySigner) attachSignedBundleWithScope(t *testing.T, req *adap
 				"label":        actionType,
 				"canonical_id": actionType,
 			}},
-			"capability_grants": []map[string]any{{
-				"capability_grant_id":   req.GetCapabilityGrantId(),
-				"adapter_id":            req.GetAdapterId(),
-				"capability_id":         req.GetCapabilityId(),
-				"action_type":           actionType,
-				"allowed_target_scopes": []string{grantScope},
-				"max_ttl":               "10m",
-			}},
-			"max_ttl":   "10m",
-			"max_scope": req.GetTargetScope(),
+			"capability_grants": []map[string]any{grant},
+			"max_ttl":           "10m",
+			"max_scope":         req.GetTargetScope(),
 		},
 	})
 	if err != nil {

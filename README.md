@@ -37,9 +37,7 @@ sudo ./bin/kernloom-adapter-klshield serve \
   --client-ca /etc/kernloom/adapter/client-ca.pem \
   --authority-public-key /etc/kernloom/trust/runtime-authority.public.json \
   --runtime-store bpf \
-  --bpffs-root /sys/fs/bpf \
-  --default-rate-pps 1000 \
-  --default-burst 2000
+  --bpffs-root /sys/fs/bpf
 ```
 
 Local plaintext smoke tests are explicit dev mode:
@@ -67,11 +65,16 @@ runtime_action.deny_temporarily_source -> kernloom_deny4_hash
 The BPF backend accepts IPv4 source `target_key` values only. IPv6, tuple-level
 and L7/session mitigations are not implemented by this adapter capability yet.
 It writes
-`runtime_action.rate_limit_source` using the adapter server defaults
-`--default-rate-pps` and `--default-burst`, writes
+`runtime_action.rate_limit_source` only when the signed RuntimeBundle
+CapabilityGrant carries `rate_limit.rate_pps` and `rate_limit.burst`, writes
 `runtime_action.deny_temporarily_source` as a deny-map value of `1`, reads back
 the pinned map after execute/state checks, and deletes the map key during
 revoke. KLIQ remains the lease and TTL owner.
+
+`--default-rate-pps` and `--default-burst` are dev fallback values only. They
+are ignored unless the adapter is started with
+`--dev-allow-default-rate-limit-parameters`; do not use that mode for
+production enforcement.
 
 Before enforcement, the adapter verifies the signed RuntimeBundle authority
 against the configured Ed25519 public key. The signature, source commit,

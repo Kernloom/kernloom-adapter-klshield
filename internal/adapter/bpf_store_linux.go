@@ -20,12 +20,13 @@ import (
 )
 
 type BPFMapRuntimeStore struct {
-	root           string
-	defaultRatePPS uint64
-	defaultBurst   uint64
-	backend        bpfRuntimeMapBackend
-	mu             sync.Mutex
-	entries        map[string]RuntimeMapEntry
+	root                          string
+	defaultRatePPS                uint64
+	defaultBurst                  uint64
+	allowDefaultRateLimitFallback bool
+	backend                       bpfRuntimeMapBackend
+	mu                            sync.Mutex
+	entries                       map[string]RuntimeMapEntry
 }
 
 var _ RuntimeMapStore = (*BPFMapRuntimeStore)(nil)
@@ -65,16 +66,21 @@ func NewBPFMapRuntimeStore(config BPFMapRuntimeStoreConfig) (*BPFMapRuntimeStore
 		burst = DefaultRuntimeBurst
 	}
 	return &BPFMapRuntimeStore{
-		root:           root,
-		defaultRatePPS: rate,
-		defaultBurst:   burst,
-		backend:        pinnedBPFMapBackend{root: root},
-		entries:        map[string]RuntimeMapEntry{},
+		root:                          root,
+		defaultRatePPS:                rate,
+		defaultBurst:                  burst,
+		allowDefaultRateLimitFallback: config.AllowDefaultRateLimitFallback,
+		backend:                       pinnedBPFMapBackend{root: root},
+		entries:                       map[string]RuntimeMapEntry{},
 	}, nil
 }
 
 func (s *BPFMapRuntimeStore) Kind() string {
 	return "bpf"
+}
+
+func (s *BPFMapRuntimeStore) RateLimitFallback() (uint64, uint64, bool) {
+	return s.defaultRatePPS, s.defaultBurst, s.allowDefaultRateLimitFallback
 }
 
 func (s *BPFMapRuntimeStore) Upsert(_ context.Context, entry RuntimeMapEntry) (RuntimeMapEntry, bool, error) {
@@ -218,7 +224,16 @@ func (s *BPFMapRuntimeStore) writeLocked(entry RuntimeMapEntry) error {
 
 	switch entry.ActionType {
 	case actionRateLimitSource:
-		value := bpfRLCfg{RatePPS: s.defaultRatePPS, Burst: s.defaultBurst}
+		ratePPS := entry.RatePPS
+		burst := entry.Burst
+		if (ratePPS == 0 || burst == 0) && s.allowDefaultRateLimitFallback {
+			ratePPS = s.defaultRatePPS
+			burst = s.defaultBurst
+		}
+		if ratePPS == 0 || burst == 0 {
+			return fmt.Errorf("rate_limit_source requires signed rate_limit.rate_pps and rate_limit.burst")
+		}
+		value := bpfRLCfg{RatePPS: ratePPS, Burst: burst}
 		if err := s.backend.UpdateRateLimit4(key, value); err != nil {
 			return fmt.Errorf("write %s target %s: %w", mapRateLimit4, entry.TargetKey, err)
 		}
