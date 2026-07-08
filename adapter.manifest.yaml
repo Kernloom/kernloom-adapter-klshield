@@ -1,0 +1,54 @@
+adapter_id: kernloom.adapter.klshield
+adapter_version: 0.1.0
+protocol_version: adapter/v1
+status: stable
+component_role: component_role.adapter
+capabilities:
+  - capability_id: enforce.runtime.rate_limit_entity
+    implementation_status: implemented
+    supported_actions:
+      - runtime_action.rate_limit_entity
+      - runtime_action.rate_limit_source
+    implemented_granularities:
+      - granularity.entity
+    required_privileges:
+      - privilege.bpf.map.write
+    evidence_quality:
+      runtime_action_readback: direct_readback
+    limitations:
+      - no_user_identity_without_projector
+      - no_session_granularity
+  - capability_id: enforce.runtime.deny_entity_temporarily
+    implementation_status: implemented
+    supported_actions:
+      - runtime_action.deny_entity_temporarily
+      - runtime_action.deny_temporarily_source
+    implemented_granularities:
+      - granularity.entity
+    required_privileges:
+      - privilege.bpf.map.write
+    evidence_quality:
+      runtime_action_readback: direct_readback
+    limitations:
+      - no_user_identity_without_projector
+      - no_session_granularity
+  - capability_id: read.runtime_action_state
+    implementation_status: implemented
+    supported_actions:
+      - runtime_action.read_runtime_action_state
+    implemented_granularities:
+      - granularity.entity
+    required_privileges:
+      - privilege.bpf.map.read
+signals:
+  - signal_id: signal.runtime_action_state_summary
+    implementation_status: implemented
+raw_signals:
+  - signal_id: signal.klshield.raw_entity_counters
+    projectors:
+      - projector.klshield.entity_metrics
+privileges:
+  - privilege_id: privilege.bpf.map.write
+  - privilege_id: privilege.bpf.map.read
+context_requirements:
+  - context.runtime_action.selector
