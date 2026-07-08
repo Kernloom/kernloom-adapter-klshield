@@ -59,6 +59,7 @@ func serve(args []string) {
 	authorityPublicKey := fs.String("authority-public-key", "", "JSON file containing runtime authority Ed25519 public key")
 	authorityKeyID := fs.String("authority-key-id", "", "expected runtime authority key_id; optional when present in --authority-public-key")
 	devSkipAuthorityVerification := fs.Bool("dev-insecure-skip-authority-verification", false, "skip signed runtime authority verification; dev/smoke only")
+	manifestDigest := fs.String("manifest-digest", os.Getenv("KERNLOOM_ADAPTER_MANIFEST_DIGEST"), "sha256 digest of the adapter manifest reported by Describe")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
@@ -88,7 +89,7 @@ func serve(args []string) {
 		os.Exit(1)
 	}
 	server := grpc.NewServer(serverOptions...)
-	adapterv1.RegisterAdapterServiceServer(server, adapter.NewWithStoreAndAuthority(store, authority))
+	adapterv1.RegisterAdapterServiceServer(server, adapter.NewWithStoreAuthorityAndManifestDigest(store, authority, *manifestDigest))
 	logger.Info("adapter_server_starting", "adapter_id", "kernloom.adapter.klshield", "addr", *addr, "runtime_store", storeKind(store), "dev_insecure_transport", *devInsecureTransport, "dev_insecure_authority", *devSkipAuthorityVerification, "dev_allow_default_rate_limit_parameters", *devAllowDefaultRateLimitParameters)
 	if err := server.Serve(listener); err != nil {
 		logger.Error("adapter_server_failed", "adapter_id", "kernloom.adapter.klshield", "addr", *addr, "error", err.Error())

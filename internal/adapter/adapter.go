@@ -29,7 +29,14 @@ const (
 	statusUnknown  = "unknown"
 
 	actionRateLimitSource       = "runtime_action.rate_limit_source"
+	actionRateLimitEntity       = "runtime_action.rate_limit_entity"
 	actionDenyTemporarilySource = "runtime_action.deny_temporarily_source"
+	actionDenyEntityTemporarily = "runtime_action.deny_entity_temporarily"
+	actionReadRuntimeAction     = "runtime_action.read_runtime_action_state"
+
+	capabilityRateLimitEntity        = "enforce.runtime.rate_limit_entity"
+	capabilityDenyEntityTemporarily  = "enforce.runtime.deny_entity_temporarily"
+	capabilityReadRuntimeActionState = "read.runtime_action_state"
 
 	mapRateLimit4 = "kernloom_rl_policy4"
 	mapDeny4      = "kernloom_deny4_hash"
@@ -37,9 +44,10 @@ const (
 
 type Adapter struct {
 	adapterv1.UnimplementedAdapterServiceServer
-	store     RuntimeMapStore
-	authority RuntimeAuthorityVerifier
-	now       func() time.Time
+	store          RuntimeMapStore
+	authority      RuntimeAuthorityVerifier
+	manifestDigest string
+	now            func() time.Time
 }
 
 func New() *Adapter {
@@ -51,13 +59,17 @@ func NewWithStore(store RuntimeMapStore) *Adapter {
 }
 
 func NewWithStoreAndAuthority(store RuntimeMapStore, authority RuntimeAuthorityVerifier) *Adapter {
+	return NewWithStoreAuthorityAndManifestDigest(store, authority, "")
+}
+
+func NewWithStoreAuthorityAndManifestDigest(store RuntimeMapStore, authority RuntimeAuthorityVerifier, manifestDigest string) *Adapter {
 	if store == nil {
 		store = NewMemoryRuntimeMapStore()
 	}
 	if authority == nil {
 		authority = RejectingRuntimeAuthorityVerifier{}
 	}
-	return &Adapter{store: store, authority: authority, now: time.Now}
+	return &Adapter{store: store, authority: authority, manifestDigest: strings.TrimSpace(manifestDigest), now: time.Now}
 }
 
 type RuntimeMapEntry struct {
@@ -187,18 +199,25 @@ func (a *Adapter) Descriptor(context.Context) (*adapterv1.AdapterDescriptor, err
 		AdapterId:       adapterID,
 		Name:            "Kernloom KLShield Adapter",
 		ProtocolVersion: adapterv1.ProtocolVersion,
+		ManifestDigest:  a.manifestDigest,
 		Capabilities: []*adapterv1.CapabilityDescriptor{
 			{
-				Id:             "klshield.runtime.source_mitigation",
-				DisplayName:    "Apply temporary IPv4 source mitigations",
+				Id:             capabilityRateLimitEntity,
+				DisplayName:    "Apply temporary entity rate limits",
 				Kind:           "runtime_executor",
-				RuntimeActions: []string{actionRateLimitSource, actionDenyTemporarilySource},
+				RuntimeActions: []string{actionRateLimitEntity, actionRateLimitSource},
 			},
 			{
-				Id:          "klshield.runtime_action_state_signals",
+				Id:             capabilityDenyEntityTemporarily,
+				DisplayName:    "Apply temporary entity denies",
+				Kind:           "runtime_executor",
+				RuntimeActions: []string{actionDenyEntityTemporarily, actionDenyTemporarilySource},
+			},
+			{
+				Id:          capabilityReadRuntimeActionState,
 				DisplayName: "Read adapter-managed runtime action state counts",
 				Kind:        "signal_provider",
-				Actions:     []string{"read_runtime_action_state_counts"},
+				Actions:     []string{actionReadRuntimeAction, "read_runtime_action_state_counts"},
 			},
 		},
 		ContextRequirements: []*adapterv1.ContextRequirementDescriptor{
@@ -211,10 +230,16 @@ func (a *Adapter) Descriptor(context.Context) (*adapterv1.AdapterDescriptor, err
 		},
 		Privileges: []*adapterv1.PrivilegeDescriptor{
 			{
-				Id:     "klshield.bpf.map.write",
+				Id:     "privilege.bpf.map.write",
 				Reason: "Write approved, TTL-bound runtime actions into KLShield maps.",
 				Scope:  "local_node",
 				Access: "write_bpf_map",
+			},
+			{
+				Id:     "privilege.bpf.map.read",
+				Reason: "Read KLShield runtime action state for approved readback evidence.",
+				Scope:  "local_node",
+				Access: "read_bpf_map",
 			},
 		},
 		Facets: []string{
@@ -476,9 +501,9 @@ func validateExecuteRequest(req *adapterv1.ExecuteRuntimeActionRequest) error {
 
 func normalizeAction(actionType string) (string, string, error) {
 	switch actionType {
-	case actionRateLimitSource, "rate_limit_source":
+	case actionRateLimitEntity, actionRateLimitSource, "rate_limit_source":
 		return actionRateLimitSource, mapRateLimit4, nil
-	case actionDenyTemporarilySource, "deny_temporarily_source":
+	case actionDenyEntityTemporarily, actionDenyTemporarilySource, "deny_temporarily_source":
 		return actionDenyTemporarilySource, mapDeny4, nil
 	default:
 		return "", "", fmt.Errorf("unsupported KLShield runtime action %q", actionType)

@@ -6,7 +6,7 @@ toolchain go1.26.4
 
 require (
 	github.com/cilium/ebpf v0.19.0
-	github.com/kernloom/kernloom-protocol v0.0.0-20260703120054-13fd22d41fdf
+	github.com/kernloom/kernloom-protocol v0.0.0-20260708121330-29a6bd5bd1e9
 	google.golang.org/grpc v1.82.0
 )
 
