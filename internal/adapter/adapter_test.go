@@ -22,6 +22,17 @@ func TestAdapterPassesServiceContract(t *testing.T) {
 	contractv1.RunServiceContract(t, New())
 }
 
+func TestDescriptorReportsManifestDigest(t *testing.T) {
+	adapter := NewWithStoreAuthorityAndManifestDigest(nil, DevInsecureRuntimeAuthorityVerifier{}, " sha256:test-manifest ")
+	desc, err := adapter.Descriptor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if desc.GetManifestDigest() != "sha256:test-manifest" {
+		t.Fatalf("expected manifest digest to be reported, got %q", desc.GetManifestDigest())
+	}
+}
+
 func TestExecuteRuntimeActionRateLimitAndReadback(t *testing.T) {
 	ctx := context.Background()
 	adapter, signer := newTestAdapter(t)
